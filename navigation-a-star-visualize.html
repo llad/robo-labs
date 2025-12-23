@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>A* Step Visualizer (No React)</title>
+  <style>
+    :root { color-scheme: dark; }
+    body { margin:0; background:#0f0f12; color:#ddd; font: 14px/1.3 system-ui, -apple-system, Segoe UI, Roboto, Arial; }
+    .wrap { display:flex; gap:12px; padding:12px; align-items:flex-start; }
+    canvas { background:#121218; border:1px solid #2a2a33; border-radius:8px; }
+    .panel { width: 520px; display:flex; flex-direction:column; gap:10px; }
+    .card { border:1px solid #2a2a33; background:#121218; padding:10px; border-radius:8px; }
+    .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+    button, select, input[type="range"] {
+      background:#1a1a22; color:#ddd; border:1px solid #2a2a33; border-radius:8px; padding:8px 10px;
+    }
+    button { cursor:pointer; }
+    button:active { transform: translateY(1px); }
+    .k { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .muted { color:#a9a9b4; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap:10px; }
+    table { width:100%; border-collapse: collapse; }
+    th, td { border-bottom:1px solid #2a2a33; padding:6px 6px; text-align:left; }
+    th { color:#bdbdd0; font-weight:600; }
+    .small { font-size: 12px; }
+    .pill { display:inline-block; padding:2px 6px; border:1px solid #2a2a33; border-radius:999px; background:#1a1a22; }
+    textarea { width:100%; min-height:110px; resize:vertical; background:#0f0f12; color:#ddd; border:1px solid #2a2a33; border-radius:8px; padding:8px; }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <canvas id="c"></canvas>
+
+  <div class="panel">
+    <div class="card">
+      <div class="row">
+        <button id="btnStep">Step</button>
+        <button id="btnRun">Run</button>
+        <button id="btnPause" disabled>Pause</button>
+        <button id="btnReset">Reset</button>
+        <button id="btnClear">Clear Walls</button>
+        <button id="btnRand">Random Walls</button>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label>Click mode
+          <select id="clickMode">
+            <option value="wall">Toggle wall</option>
+            <option value="start">Set start</option>
+            <option value="goal">Set goal</option>
+          </select>
+        </label>
+        <label>Heuristic
+          <select id="heuristicSel">
+            <option value="manhattan">Manhattan (4-neighbor)</option>
+          </select>
+        </label>
+        <label class="small">Run speed
+          <input id="speed" type="range" min="1" max="20" step="1" value="6" />
+          <span id="speedVal" class="k small">6 steps/s</span>
+        </label>
+      </div>
+      <div class="muted small" style="margin-top:8px">
+        This visualizer shows A* state after each expansion: <span class="pill k">current</span>, <span class="pill k">open</span>, <span class="pill k">closed</span>, <span class="pill k">cameFrom</span>, and per-neighbor updates.
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <div class="row" style="justify-content:space-between">
+          <div class="k">Core variables</div>
+          <div id="status" class="pill k small"></div>
+        </div>
+        <table class="k small" id="varsTable">
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="k">Open set (priority queue view)</div>
+        <table class="k small" id="openTable">
+          <thead><tr><th>node</th><th>g</th><th>h</th><th>f</th><th>parent</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="k">Neighbor checks for current step</div>
+        <table class="k small" id="nbrTable">
+          <thead><tr><th>nbr</th><th>pass?</th><th>tent_g</th><th>old_g</th><th>action</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <div class="k">Path reconstruction</div>
+        <div class="muted small">Updates when goal is reached. Shows chain goal → ... → start.</div>
+        <div id="pathBox" class="k small" style="margin-top:8px; white-space:pre-wrap;"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="k">Step log</div>
+      <textarea id="log" class="k small" readonly></textarea>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ----- Small grid for algorithm clarity -----
+  const CELL = 36;
+  const GRID_W = 10;
+  const GRID_H = 7;
+  const W = GRID_W * CELL;
+  const H = GRID_H * CELL;
+
+  const canvas = document.getElementById('c');
+  canvas.width = W;
+  canvas.height = H;
+  const ctx = canvas.getContext('2d');
+
+  // UI elements
+  const btnStep = document.getElementById('btnStep');
+  const btnRun = document.getElementById('btnRun');
+  const btnPause = document.getElementById('btnPause');
+  const btnReset = document.getElementById('btnReset');
+  const btnClear = document.getElementById('btnClear');
+  const btnRand = document.getElementById('btnRand');
+  const clickMode = document.getElementById('clickMode');
+  const speed = document.getElementById('speed');
+  const speedVal = document.getElementById('speedVal');
+  const status = document.getElementById('status');
+
+  const varsTbody = document.querySelector('#varsTable tbody');
+  const openTbody = document.querySelector('#openTable tbody');
+  const nbrTbody  = document.querySelector('#nbrTable tbody');
+  const logEl = document.getElementById('log');
+  const pathBox = document.getElementById('pathBox');
+
+  speed.addEventListener('input', () => speedVal.textContent = `${speed.value} steps/s`);
+
+  // ----- Grid: 0 free, 1 wall -----
+  let grid;
+
+  // Start/goal (cells)
+  let start, goal;
+
+  // ----- A* state (shown to user) -----
+  // We keep a "paused, step-by-step" A* engine.
+  const AStarState = () => ({
+    stepCount: 0,
+    openHeap: [],        // array of {k, f, tie, g, h}
+    openSet: new Set(),  // membership
+    closed: new Set(),
+    cameFrom: new Map(), // childKey -> parentKey
+    gScore: new Map(),   // key -> g
+    fScore: new Map(),   // key -> f
+    current: null,       // key
+    lastNeighborReport: [], // per-step neighbor actions
+    finished: false,
+    outcome: "running",  // running | no_path | reached_goal
+  });
+
+  let ast = AStarState();
+
+  // ----- Helpers -----
+  const key = (x,y) => `${x},${y}`;
+  const parseKey = (k) => k.split(',').map(Number);
+  const inBounds = (x,y) => x>=0 && x<GRID_W && y>=0 && y<GRID_H;
+  const passable = (x,y) => grid[y][x] === 0;
+
+  function heuristicManhattan(a, b) {
+    return Math.abs(a[0]-b[0]) + Math.abs(a[1]-b[1]);
+  }
+
+  function neighbors4([x,y]) {
+    return [[x+1,y],[x-1,y],[x,y+1],[x,y-1]];
+  }
+
+  // Simple min-heap (priority queue) by (f, tie) to keep deterministic ordering
+  function heapPush(heap, item) {
+    heap.push(item);
+    siftUp(heap, heap.length-1);
+  }
+  function heapPop(heap) {
+    if (!heap.length) return null;
+    const top = heap[0];
+    const last = heap.pop();
+    if (heap.length) { heap[0]=last; siftDown(heap, 0); }
+    return top;
+  }
+  function siftUp(heap, i) {
+    while (i>0) {
+      const p = (i-1)>>1;
+      if (heapLess(heap[p], heap[i])) break;
+      [heap[p], heap[i]] = [heap[i], heap[p]];
+      i = p;
+    }
+  }
+  function siftDown(heap, i) {
+    while (true) {
+      const l = i*2+1, r=l+1;
+      let m=i;
+      if (l<heap.length && heapLess(heap[l], heap[m])) m=l;
+      if (r<heap.length && heapLess(heap[r], heap[m])) m=r;
+      if (m===i) break;
+      [heap[m], heap[i]] = [heap[i], heap[m]];
+      i=m;
+    }
+  }
+  function heapLess(a,b) {
+    if (a.f !== b.f) return a.f < b.f;
+    return a.tie < b.tie;
+  }
+
+  function cellCenter([cx,cy]) { return [(cx+0.5)*CELL, (cy+0.5)*CELL]; }
+
+  function log(line) {
+    logEl.value += line + "\n";
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+
+  function resetAStar() {
+    ast = AStarState();
+    pathBox.textContent = "";
+    logEl.value = "";
+
+    const sK = key(start[0], start[1]);
+    const gK = key(goal[0], goal[1]);
+
+    ast.gScore.set(sK, 0);
+    const h = heuristicManhattan(start, goal);
+    ast.fScore.set(sK, h);
+
+    // tie = insertion order so ties are stable
+    heapPush(ast.openHeap, { k: sK, f: h, tie: 0, g: 0, h });
+    ast.openSet.add(sK);
+
+    ast.current = null;
+    ast.finished = false;
+    ast.outcome = "running";
+    ast.stepCount = 0;
+
+    log(`Init: start=${sK} goal=${gK}`);
+    log(`g(start)=0, h(start)=${h}, f(start)=${h}`);
+    renderAll();
+  }
+
+  function reconstructPath() {
+    const gK = key(goal[0], goal[1]);
+    const sK = key(start[0], start[1]);
+    if (!ast.cameFrom.has(gK) && gK !== sK) return [];
+
+    const chain = [];
+    let cur = gK;
+    chain.push(cur);
+    while (cur !== sK) {
+      cur = ast.cameFrom.get(cur);
+      if (!cur) break;
+      chain.push(cur);
+    }
+    return chain; // goal -> ... -> start
+  }
+
+  // One A* expansion step
+  function stepAStar() {
+    if (ast.finished) return;
+
+    ast.lastNeighborReport = [];
+    ast.stepCount += 1;
+
+    // Pop the next best from the heap that is still in openSet (skip stale)
+    let popped = null;
+    while (ast.openHeap.length) {
+      const cand = heapPop(ast.openHeap);
+      if (ast.openSet.has(cand.k)) { popped = cand; break; }
+    }
+
+    if (!popped) {
+      ast.finished = true;
+      ast.outcome = "no_path";
+      log(`Step ${ast.stepCount}: open set empty -> NO PATH`);
+      renderAll();
+      return;
+    }
+
+    const curK = popped.k;
+    ast.current = curK;
+    ast.openSet.delete(curK);
+    ast.closed.add(curK);
+
+    const [cx, cy] = parseKey(curK);
+
+    log(`\nStep ${ast.stepCount}: pop current=${curK} with f=${popped.f} (g=${popped.g}, h=${popped.h})`);
+    log(`Move current to closed. Expand neighbors.`);
+
+    const goalK = key(goal[0], goal[1]);
+    if (curK === goalK) {
+      ast.finished = true;
+      ast.outcome = "reached_goal";
+      const chain = reconstructPath();
+      pathBox.textContent = chain.join("  ->  ");
+      log(`Current is goal. DONE. Reconstruct path (goal -> ... -> start).`);
+      renderAll();
+      return;
+    }
+
+    // Expand neighbors
+    const curG = ast.gScore.get(curK);
+
+    for (const [nx, ny] of neighbors4([cx,cy])) {
+      const nbrK = key(nx,ny);
+
+      const inB = inBounds(nx,ny);
+      const pass = inB && passable(nx,ny);
+      const isClosed = ast.closed.has(nbrK);
+
+      let action = "";
+      let oldG = ast.gScore.has(nbrK) ? ast.gScore.get(nbrK) : null;
+      let tentG = null;
+
+      if (!inB) {
+        action = "skip (OOB)";
+      } else if (!pass) {
+        action = "skip (wall)";
+      } else if (isClosed) {
+        action = "skip (closed)";
+      } else {
+        tentG = curG + 1;
+        if (oldG === null || tentG < oldG) {
+          ast.cameFrom.set(nbrK, curK);
+          ast.gScore.set(nbrK, tentG);
+
+          const h = heuristicManhattan([nx,ny], goal);
+          const f = tentG + h;
+          ast.fScore.set(nbrK, f);
+
+          // Insert into heap; add to openSet
+          const tie = ast.stepCount * 1000 + ast.openHeap.length; // stable-ish
+          heapPush(ast.openHeap, { k: nbrK, f, tie, g: tentG, h });
+          ast.openSet.add(nbrK);
+
+          action = (oldG === null) ? "discover/update (add to open)" : "improve g (update parent)";
+          log(`  Neighbor ${nbrK}: tent_g=${tentG}, h=${h}, f=${f} -> ${action} (parent=${curK})`);
+        } else {
+          action = "no change (worse g)";
+          log(`  Neighbor ${nbrK}: tent_g=${tentG} >= old_g=${oldG} -> ${action}`);
+        }
+      }
+
+      ast.lastNeighborReport.push({
+        nbr: nbrK,
+        pass: pass ? "yes" : (inB ? "no" : "OOB"),
+        tentG: tentG === null ? "-" : tentG,
+        oldG: oldG === null ? "-" : oldG,
+        action
+      });
+    }
+
+    renderAll();
+  }
+
+  // ----- Rendering -----
+  function drawCell([x,y], fill) {
+    ctx.fillStyle = fill;
+    ctx.fillRect(x*CELL, y*CELL, CELL, CELL);
+  }
+
+  function drawGridLines() {
+    ctx.strokeStyle = "#2a2a33";
+    ctx.lineWidth = 1;
+    for (let x=0; x<=W; x+=CELL) {
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H); ctx.stroke();
+    }
+    for (let y=0; y<=H; y+=CELL) {
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W,y); ctx.stroke();
+    }
+  }
+
+  function renderCanvas() {
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle = "#0f0f12";
+    ctx.fillRect(0,0,W,H);
+
+    // walls
+    for (let y=0; y<GRID_H; y++) {
+      for (let x=0; x<GRID_W; x++) {
+        if (grid[y][x] === 1) drawCell([x,y], "#4a4a4a");
+      }
+    }
+
+    // closed
+    ctx.globalAlpha = 0.85;
+    for (const ck of ast.closed) {
+      const [x,y] = parseKey(ck);
+      if (grid[y][x] === 1) continue;
+      if (x===start[0] && y===start[1]) continue;
+      if (x===goal[0] && y===goal[1]) continue;
+      drawCell([x,y], "#1b2a40");
+    }
+
+    // open
+    for (const ok of ast.openSet) {
+      const [x,y] = parseKey(ok);
+      if (grid[y][x] === 1) continue;
+      if (x===start[0] && y===start[1]) continue;
+      if (x===goal[0] && y===goal[1]) continue;
+      drawCell([x,y], "#3a2f18"); // amber-ish
+    }
+
+    // current
+    if (ast.current) {
+      const [x,y] = parseKey(ast.current);
+      drawCell([x,y], "#7a1f3a"); // magenta-ish
+    }
+
+    ctx.globalAlpha = 1.0;
+
+    // start/goal
+    drawCell(start, "#2f78e3");
+    drawCell(goal,  "#dc5a3a");
+
+    // draw parent pointers (cameFrom) as arrows
+    ctx.strokeStyle = "#8d8da6";
+    ctx.lineWidth = 2;
+    ctx.globalAlpha = 0.75;
+    for (const [childK, parentK] of ast.cameFrom.entries()) {
+      const [cx,cy] = parseKey(childK);
+      const [px,py] = parseKey(parentK);
+      // don't clutter too much: skip walls
+      if (!inBounds(cx,cy) || grid[cy][cx]===1) continue;
+
+      const [cpx, cpy] = cellCenter([cx,cy]);
+      const [ppx, ppy] = cellCenter([px,py]);
+      // arrow from child to parent
+      ctx.beginPath();
+      ctx.moveTo(cpx, cpy);
+      ctx.lineTo(ppx, ppy);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1.0;
+
+    // annotate cells with g/f (small)
+    ctx.fillStyle = "#d6d6e6";
+    ctx.font = "11px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace";
+    for (let y=0; y<GRID_H; y++) {
+      for (let x=0; x<GRID_W; x++) {
+        if (grid[y][x] === 1) continue;
+        const k = key(x,y);
+        if (!ast.gScore.has(k)) continue;
+        const g = ast.gScore.get(k);
+        const f = ast.fScore.get(k);
+        ctx.fillText(`g${g}`, x*CELL+4, y*CELL+14);
+        ctx.fillText(`f${f}`, x*CELL+4, y*CELL+28);
+      }
+    }
+
+    drawGridLines();
+  }
+
+  function renderVars() {
+    const sK = key(start[0], start[1]);
+    const gK = key(goal[0], goal[1]);
+    const cur = ast.current ?? "-";
+
+    const openCount = ast.openSet.size;
+    const closedCount = ast.closed.size;
+
+    status.textContent =
+      ast.outcome === "running" ? "RUNNING" :
+      ast.outcome === "no_path" ? "NO PATH" :
+      "REACHED GOAL";
+
+    const rows = [
+      ["stepCount", String(ast.stepCount)],
+      ["start", sK],
+      ["goal", gK],
+      ["current", cur],
+      ["openSet size", String(openCount)],
+      ["closed size", String(closedCount)],
+      ["cameFrom size", String(ast.cameFrom.size)],
+      ["gScore(current)", ast.current && ast.gScore.has(ast.current) ? String(ast.gScore.get(ast.current)) : "-"],
+      ["fScore(current)", ast.current && ast.fScore.has(ast.current) ? String(ast.fScore.get(ast.current)) : "-"],
+    ];
+
+    varsTbody.innerHTML = rows.map(([k,v]) =>
+      `<tr><td>${k}</td><td style="text-align:right">${v}</td></tr>`
+    ).join("");
+  }
+
+  function renderOpenTable() {
+    // Build a sorted view of openSet by f then tie-like (we don't store tie in maps),
+    // so compute from fScore + heuristic; use gScore and fScore
+    const items = [];
+    for (const k of ast.openSet) {
+      const [x,y] = parseKey(k);
+      const g = ast.gScore.get(k);
+      const h = heuristicManhattan([x,y], goal);
+      const f = g + h;
+      const parent = ast.cameFrom.get(k) ?? "-";
+      items.push({k,g,h,f,parent});
+    }
+    items.sort((a,b) => a.f - b.f || a.h - b.h || a.k.localeCompare(b.k));
+
+    openTbody.innerHTML = items.slice(0, 18).map(it =>
+      `<tr>
+        <td>${it.k}</td>
+        <td>${it.g}</td>
+        <td>${it.h}</td>
+        <td>${it.f}</td>
+        <td>${it.parent}</td>
+      </tr>`
+    ).join("") || `<tr><td colspan="5" class="muted">empty</td></tr>`;
+  }
+
+  function renderNeighborTable() {
+    const rows = ast.lastNeighborReport;
+    nbrTbody.innerHTML = rows.map(r =>
+      `<tr>
+        <td>${r.nbr}</td>
+        <td>${r.pass}</td>
+        <td>${r.tentG}</td>
+        <td>${r.oldG}</td>
+        <td>${r.action}</td>
+      </tr>`
+    ).join("") || `<tr><td colspan="5" class="muted">step to see neighbor checks</td></tr>`;
+  }
+
+  function renderPathBox() {
+    if (ast.outcome !== "reached_goal") {
+      pathBox.textContent = "(not reached yet)";
+      return;
+    }
+    const chain = reconstructPath();
+    pathBox.textContent = chain.join("  ->  ");
+  }
+
+  function renderAll() {
+    renderCanvas();
+    renderVars();
+    renderOpenTable();
+    renderNeighborTable();
+    renderPathBox();
+  }
+
+  // ----- Interactions -----
+  function mouseToCell(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = evt.clientX - rect.left;
+    const my = evt.clientY - rect.top;
+    return [Math.floor(mx / CELL), Math.floor(my / CELL)];
+  }
+
+  canvas.addEventListener('mousedown', (e) => {
+    const [x,y] = mouseToCell(e);
+    if (!inBounds(x,y)) return;
+
+    const mode = clickMode.value;
+
+    if (mode === "wall") {
+      // Toggle wall, but don't allow wall on start/goal
+      if ((x===start[0] && y===start[1]) || (x===goal[0] && y===goal[1])) return;
+      grid[y][x] = grid[y][x] ? 0 : 1;
+      resetAStar();
+    } else if (mode === "start") {
+      if (!passable(x,y)) return;
+      start = [x,y];
+      resetAStar();
+    } else if (mode === "goal") {
+      if (!passable(x,y)) return;
+      goal = [x,y];
+      resetAStar();
+    }
+  });
+
+  // ----- Run loop (auto-step) -----
+  let runTimer = null;
+
+  function run() {
+    if (runTimer) return;
+    btnRun.disabled = true;
+    btnPause.disabled = false;
+    const intervalMs = () => Math.max(20, Math.floor(1000 / Number(speed.value)));
+
+    runTimer = setInterval(() => {
+      if (ast.finished) { pause(); return; }
+      stepAStar();
+    }, intervalMs());
+  }
+
+  function pause() {
+    if (!runTimer) return;
+    clearInterval(runTimer);
+    runTimer = null;
+    btnRun.disabled = false;
+    btnPause.disabled = true;
+  }
+
+  btnStep.onclick = () => stepAStar();
+  btnRun.onclick = () => run();
+  btnPause.onclick = () => pause();
+
+  btnReset.onclick = () => {
+    pause();
+    resetAStar();
+  };
+
+  btnClear.onclick = () => {
+    pause();
+    for (let y=0; y<GRID_H; y++) for (let x=0; x<GRID_W; x++) grid[y][x]=0;
+    resetAStar();
+  };
+
+  btnRand.onclick = () => {
+    pause();
+    // light random walls; keep start/goal free
+    for (let y=0; y<GRID_H; y++) {
+      for (let x=0; x<GRID_W; x++) {
+        const isSG = (x===start[0] && y===start[1]) || (x===goal[0] && y===goal[1]);
+        grid[y][x] = isSG ? 0 : (Math.random() < 0.18 ? 1 : 0);
+      }
+    }
+    resetAStar();
+  };
+
+  speed.addEventListener('input', () => {
+    if (runTimer) { pause(); run(); }
+  });
+
+  // ----- Initialize -----
+  function init() {
+    grid = Array.from({length: GRID_H}, () => Array(GRID_W).fill(0));
+    start = [1, 3];
+    goal = [8, 3];
+
+    // a tiny default obstacle to make it interesting
+    const walls = [[4,1],[4,2],[4,3],[4,4],[4,5]];
+    for (const [x,y] of walls) grid[y][x] = 1;
+    grid[start[1]][start[0]] = 0;
+    grid[goal[1]][goal[0]] = 0;
+
+    resetAStar();
+  }
+
+  init();
+})();
+</script>
+</body>
+</html>
