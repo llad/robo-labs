@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Virtual Sensors Lab — Algorithm Behavior (#1)</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; }
+    header { padding: 12px 16px; border-bottom: 1px solid rgba(127,127,127,.35); }
+    .wrap { display: grid; grid-template-columns: 360px 1fr; min-height: calc(100vh - 54px); }
+    @media (max-width: 980px){ .wrap{ grid-template-columns: 1fr; } }
+    aside { padding: 12px 16px; border-right: 1px solid rgba(127,127,127,.35); }
+    main { padding: 12px 16px; }
+    fieldset { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; padding: 10px 12px; margin: 0 0 12px; }
+    legend { padding: 0 6px; opacity: .85; }
+    label { display: grid; grid-template-columns: 1fr 140px; gap: 10px; align-items: center; margin: 8px 0; }
+    input[type="range"], select { width: 100%; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    button { padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(127,127,127,.35); background: transparent; cursor: pointer; }
+    button.primary { background: rgba(80,120,255,.18); }
+    button:disabled { opacity: .5; cursor: not-allowed; }
+    .stats { font-variant-numeric: tabular-nums; font-size: 13px; line-height: 1.4; opacity: .9; }
+    canvas { border: 1px solid rgba(127,127,127,.35); border-radius: 10px; max-width: 100%; height: auto; }
+    .hint { font-size: 12px; opacity: .75; margin-top: 8px; }
+    .kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 6px; border: 1px solid rgba(127,127,127,.35); border-radius: 6px; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>Virtual Sensors Lab</strong> — Explore <strong>Algorithm Behavior</strong> with partial observability + replanning
+</header>
+
+<div class="wrap">
+  <aside>
+    <fieldset>
+      <legend>World</legend>
+      <label>
+        Grid size
+        <select id="gridSize">
+          <option value="24">24×24</option>
+          <option value="32" selected>32×32</option>
+          <option value="40">40×40</option>
+        </select>
+      </label>
+      <label>
+        Obstacle density
+        <input id="density" type="range" min="0" max="0.45" step="0.01" value="0.22" />
+      </label>
+      <label>
+        Corridor bias
+        <input id="corridor" type="range" min="0" max="1" step="0.05" value="0.35" />
+      </label>
+      <div class="row">
+        <button id="regen" class="primary">Regenerate</button>
+        <button id="clear">Clear</button>
+      </div>
+      <div class="hint">
+        Edit: <span class="kbd">click</span> to toggle wall, <span class="kbd">S</span> set start, <span class="kbd">G</span> set goal.
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Virtual Sensor (local reveal)</legend>
+      <label>
+        Radius (cells)
+        <input id="radius" type="range" min="1" max="10" step="1" value="5" />
+      </label>
+      <label>
+        Noise (flip prob.)
+        <input id="noise" type="range" min="0" max="0.25" step="0.01" value="0.04" />
+      </label>
+      <label>
+        Update every N steps
+        <input id="sensorEvery" type="range" min="1" max="8" step="1" value="1" />
+      </label>
+      <label>
+        Map assumption
+        <select id="unknownAs">
+          <option value="free" selected>Unknown = free (optimistic)</option>
+          <option value="blocked">Unknown = blocked (pessimistic)</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <fieldset>
+      <legend>Planner / Behavior</legend>
+      <label>
+        Algorithm
+        <select id="algo">
+          <option value="astar" selected>A* (f=g+h)</option>
+          <option value="dijkstra">Dijkstra (h=0)</option>
+          <option value="greedy">Greedy Best-First (f=h)</option>
+        </select>
+      </label>
+      <label>
+        Heuristic
+        <select id="heur">
+          <option value="manhattan" selected>Manhattan</option>
+          <option value="euclid">Euclidean</option>
+        </select>
+      </label>
+      <label>
+        Tie-break
+        <select id="tiebreak">
+          <option value="lowg" selected>Prefer lower g</option>
+          <option value="highg">Prefer higher g</option>
+        </select>
+      </label>
+      <label>
+        Replan mode
+        <select id="replan">
+          <option value="everyStep" selected>Replan every move</option>
+          <option value="onFail">Replan only when blocked</option>
+          <option value="never">Plan once</option>
+        </select>
+      </label>
+      <label>
+        Speed (ms/step)
+        <input id="speed" type="range" min="0" max="200" step="10" value="40" />
+      </label>
+      <div class="row">
+        <button id="step">Step</button>
+        <button id="run" class="primary">Run</button>
+        <button id="pause">Pause</button>
+        <button id="reset">Reset agent</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>What you’re exploring (#1)</legend>
+      <div class="stats">
+        This app shows how the <strong>same planner</strong> behaves when its map is built from a
+        <strong>virtual local sensor</strong> (partial + noisy + delayed).<br><br>
+        Watch: detours, oscillation, “optimism traps,” replan frequency, and open/closed growth.
+      </div>
+    </fieldset>
+
+    <div class="stats" id="stats"></div>
+  </aside>
+
+  <main>
+    <canvas id="c" width="800" height="800"></canvas>
+    <div class="hint">
+      View: Known free/blocked is colored; Unknown is dim. A* open set is tinted; closed set is lightly filled.
+      Executed path is thick; current plan is thin.
+    </div>
+  </main>
+</div>
+
+<script>
+(() => {
+  // ---------- Utilities ----------
+  const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+  const rand = (a=0, b=1) => a + Math.random()*(b-a);
+  const key = (x,y) => `${x},${y}`;
+
+  function manhattan(a,b){ return Math.abs(a.x-b.x)+Math.abs(a.y-b.y); }
+  function euclid(a,b){ return Math.hypot(a.x-b.x, a.y-b.y); }
+
+  // Min-heap priority queue (stable-ish with a secondary key)
+  class MinHeap {
+    constructor(){ this.arr=[]; }
+    push(item){ this.arr.push(item); this._up(this.arr.length-1); }
+    pop(){
+      if(this.arr.length===0) return null;
+      const top=this.arr[0];
+      const last=this.arr.pop();
+      if(this.arr.length){ this.arr[0]=last; this._down(0); }
+      return top;
+    }
+    get size(){ return this.arr.length; }
+    _up(i){
+      while(i>0){
+        const p=(i-1)>>1;
+        if(this.arr[p].pri <= this.arr[i].pri) break;
+        [this.arr[p],this.arr[i]]=[this.arr[i],this.arr[p]];
+        i=p;
+      }
+    }
+    _down(i){
+      const n=this.arr.length;
+      while(true){
+        let l=i*2+1, r=l+1, s=i;
+        if(l<n && this.arr[l].pri < this.arr[s].pri) s=l;
+        if(r<n && this.arr[r].pri < this.arr[s].pri) s=r;
+        if(s===i) break;
+        [this.arr[s],this.arr[i]]=[this.arr[i],this.arr[s]];
+        i=s;
+      }
+    }
+  }
+
+  // ---------- App State ----------
+  const el = id => document.getElementById(id);
+  const canvas = el("c");
+  const ctx = canvas.getContext("2d");
+
+  let N = +el("gridSize").value;
+  let world = [];        // true map: 0 free, 1 wall
+  let known = [];        // agent map: -1 unknown, 0 free, 1 wall
+  let start = {x:1,y:1};
+  let goal  = {x:N-2,y:N-2};
+
+  let agent = {x:start.x, y:start.y};
+  let executed = [];     // visited cells in order
+  let plan = [];         // current plan as list of cells
+  let openSet = new Set();
+  let closedSet = new Set();
+
+  let stepCount = 0;
+  let replans = 0;
+  let expansions = 0;
+  let sensorTicks = 0;
+  let running = false;
+  let timer = null;
+
+  function resizeCanvas() {
+    // Keep square canvas sized to container, but preserve internal resolution
+    const max = Math.min(900, Math.floor((canvas.parentElement.clientWidth || 900) - 4));
+    canvas.style.width = max + "px";
+    canvas.style.height = max + "px";
+  }
+  window.addEventListener("resize", resizeCanvas);
+
+  // ---------- World generation ----------
+  function makeEmpty(n){
+    world = Array.from({length:n}, () => Array(n).fill(0));
+    known = Array.from({length:n}, () => Array(n).fill(-1));
+  }
+
+  function carveCorridors(n, bias){
+    // Random walk corridors to make maps less uniform
+    const walkers = Math.floor(3 + bias*7);
+    for(let w=0; w<walkers; w++){
+      let x = (Math.random()*n)|0, y=(Math.random()*n)|0;
+      for(let i=0; i< n*n*0.12; i++){
+        world[y][x]=0;
+        const dir = (Math.random()*4)|0;
+        if(dir===0) x=clamp(x+1,0,n-1);
+        if(dir===1) x=clamp(x-1,0,n-1);
+        if(dir===2) y=clamp(y+1,0,n-1);
+        if(dir===3) y=clamp(y-1,0,n-1);
+      }
+    }
+  }
+
+  function generateWorld(){
+    N = +el("gridSize").value;
+    makeEmpty(N);
+
+    // Border walls
+    for(let i=0;i<N;i++){ world[0][i]=1; world[N-1][i]=1; world[i][0]=1; world[i][N-1]=1; }
+
+    const density = +el("density").value;
+    const corridor = +el("corridor").value;
+
+    // Start with random walls
+    for(let y=1;y<N-1;y++){
+      for(let x=1;x<N-1;x++){
+        world[y][x] = (Math.random() < density) ? 1 : 0;
+      }
+    }
+
+    // Carve corridors
+    carveCorridors(N, corridor);
+
+    // Ensure start/goal are free
+    start = {x:1,y:1};
+    goal  = {x:N-2,y:N-2};
+    world[start.y][start.x]=0;
+    world[goal.y][goal.x]=0;
+
+    resetAgent(true);
+  }
+
+  function clearWorld(){
+    N = +el("gridSize").value;
+    makeEmpty(N);
+    for(let i=0;i<N;i++){ world[0][i]=1; world[N-1][i]=1; world[i][0]=1; world[i][N-1]=1; }
+    start = {x:1,y:1};
+    goal  = {x:N-2,y:N-2};
+    world[start.y][start.x]=0;
+    world[goal.y][goal.x]=0;
+    resetAgent(true);
+  }
+
+  // ---------- Virtual Sensor ----------
+  function sensorReveal(){
+    sensorTicks++;
+    const r = +el("radius").value;
+    const p = +el("noise").value;
+
+    for(let dy=-r; dy<=r; dy++){
+      for(let dx=-r; dx<=r; dx++){
+        const x = agent.x + dx, y = agent.y + dy;
+        if(x<0||y<0||x>=N||y>=N) continue;
+        if(dx*dx + dy*dy > r*r) continue;
+
+        let truth = world[y][x]; // 0/1
+        // noise: flip with probability p
+        if(Math.random() < p) truth = truth ? 0 : 1;
+        known[y][x] = truth;
+      }
+    }
+  }
+
+  function knownCellIsBlocked(x,y){
+    const ua = el("unknownAs").value;
+    const v = known[y][x];
+    if(v === -1) return (ua === "blocked");
+    return v === 1;
+  }
+
+  // ---------- Planning (A*, Dijkstra, Greedy) ----------
+  function heuristic(a,b){
+    const h = el("heur").value;
+    return (h==="euclid") ? euclid(a,b) : manhattan(a,b);
+  }
+
+  function planPath(){
+    openSet.clear();
+    closedSet.clear();
+
+    const algo = el("algo").value;
+    const tiebreak = el("tiebreak").value;
+
+    const s = {x:agent.x, y:agent.y};
+    const g = {x:goal.x, y:goal.y};
+
+    const pq = new MinHeap();
+    const came = new Map();
+    const gScore = new Map();
+
+    const h0 = heuristic(s,g);
+    const g0 = 0;
+
+    const f0 =
+      (algo === "dijkstra") ? g0 :
+      (algo === "greedy")   ? h0 :
+                              (g0 + h0); // astar
+
+    // pri packs tie-break into fractional part
+    // prefer low g -> smaller tie, prefer high g -> invert
+    const tie = (tiebreak==="lowg") ? 0 : 1;
+    pq.push({x:s.x,y:s.y, pri: f0 + (tie*1e-6), f:f0, g:g0, h:h0});
+    gScore.set(key(s.x,s.y), 0);
+
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]];
+
+    let localExpansions = 0;
+
+    while(pq.size){
+      const cur = pq.pop();
+      const ck = key(cur.x,cur.y);
+      if(closedSet.has(ck)) continue;
+
+      closedSet.add(ck);
+      localExpansions++;
+
+      if(cur.x===g.x && cur.y===g.y){
+        expansions += localExpansions;
+        return reconstruct(came, cur.x, cur.y);
+      }
+
+      for(const [dx,dy] of dirs){
+        const nx=cur.x+dx, ny=cur.y+dy;
+        if(nx<0||ny<0||nx>=N||ny>=N) continue;
+        if(world[ny][nx]===1) {
+          // note: the *true* world blocks movement; planning uses known map
+        }
+
+        // Planning uses known map assumption:
+        if(knownCellIsBlocked(nx,ny)) continue;
+
+        const nk = key(nx,ny);
+        if(closedSet.has(nk)) continue;
+
+        const tentativeG = cur.g + 1;
+
+        const prev = gScore.get(nk);
+        if(prev === undefined || tentativeG < prev){
+          gScore.set(nk, tentativeG);
+          came.set(nk, ck);
+
+          const h = heuristic({x:nx,y:ny}, g);
+          let f =
+            (algo === "dijkstra") ? tentativeG :
+            (algo === "greedy")   ? h :
+                                   (tentativeG + h);
+
+          // tie-breaker: use tiny epsilon based on g preference (high g => smaller epsilon)
+          const eps = (tiebreak==="highg") ? (1e-6 * (10000 - tentativeG)) : (1e-6 * tentativeG);
+          pq.push({x:nx,y:ny, pri: f + eps, f, g:tentativeG, h});
+          openSet.add(nk);
+        }
+      }
+    }
+
+    expansions += localExpansions;
+    return []; // no path
+  }
+
+  function reconstruct(came, gx, gy){
+    const out = [{x:gx,y:gy}];
+    let kcur = key(gx,gy);
+    while(came.has(kcur)){
+      const prev = came.get(kcur);
+      const [px,py] = prev.split(",").map(Number);
+      out.push({x:px,y:py});
+      kcur = prev;
+    }
+    out.reverse();
+    return out;
+  }
+
+  // ---------- Simulation step ----------
+  function resetAgent(revealImmediately){
+    stop();
+    agent = {x:start.x, y:start.y};
+    executed = [{x:agent.x,y:agent.y}];
+    plan = [];
+    openSet.clear();
+    closedSet.clear();
+    stepCount = 0;
+    replans = 0;
+    expansions = 0;
+    sensorTicks = 0;
+
+    // reset known map to unknown; optionally reveal initial sensor sweep
+    known = Array.from({length:N}, () => Array(N).fill(-1));
+    if(revealImmediately) sensorReveal();
+
+    draw();
+    updateStats();
+  }
+
+  function atGoal(){ return agent.x===goal.x && agent.y===goal.y; }
+
+  function doStep(){
+    if(atGoal()){ stop(); return; }
+
+    stepCount++;
+
+    const sensorEvery = +el("sensorEvery").value;
+    if(stepCount % sensorEvery === 0){
+      sensorReveal();
+    }
+
+    const replanMode = el("replan").value;
+
+    let needPlan = (plan.length===0);
+    if(replanMode==="everyStep") needPlan = true;
+
+    if(needPlan){
+      replans++;
+      plan = planPath();
+      // plan includes current cell; keep it as-is for drawing
+    }
+
+    // Choose next move from plan
+    let next = null;
+    if(plan.length >= 2){
+      next = plan[1];
+    } else if(plan.length === 1){
+      // already at goal or stuck
+      next = null;
+    } else {
+      next = null;
+    }
+
+    if(!next){
+      // no plan — stop
+      stop();
+      draw();
+      updateStats("No plan found.");
+      return;
+    }
+
+    // Movement uses TRUE world (you can't walk through unseen walls)
+    if(world[next.y][next.x] === 1){
+      // discovered collision with reality
+      if(replanMode==="onFail" || replanMode==="everyStep"){
+        // Mark as blocked in known map (even if noise said otherwise)
+        known[next.y][next.x] = 1;
+        plan = [];
+        // Don't move; next tick will replan
+      } else {
+        stop();
+        updateStats("Blocked by unseen wall (plan-once mode).");
+      }
+    } else {
+      agent.x = next.x; agent.y = next.y;
+      executed.push({x:agent.x,y:agent.y});
+      // Advance plan by one step
+      plan.shift();
+    }
+
+    draw();
+    updateStats();
+    if(atGoal()) stop();
+  }
+
+  // ---------- Rendering ----------
+  function draw(){
+    resizeCanvas();
+    const size = canvas.width; // internal pixels
+    const cell = size / N;
+
+    ctx.clearRect(0,0,size,size);
+
+    // background
+    ctx.fillStyle = "rgba(127,127,127,0.06)";
+    ctx.fillRect(0,0,size,size);
+
+    // draw cells
+    for(let y=0;y<N;y++){
+      for(let x=0;x<N;x++){
+        const k = key(x,y);
+
+        // Unknown vs known
+        const kv = known[y][x];
+        const isUnknown = (kv === -1);
+        const isKnownWall = (kv === 1);
+        const isKnownFree = (kv === 0);
+
+        // Base tile
+        if(isUnknown){
+          ctx.fillStyle = "rgba(127,127,127,0.10)";
+        } else if(isKnownWall){
+          ctx.fillStyle = "rgba(220,80,80,0.35)";
+        } else if(isKnownFree){
+          ctx.fillStyle = "rgba(80,220,120,0.10)";
+        }
+        ctx.fillRect(x*cell, y*cell, cell, cell);
+
+        // Overlay open/closed from last plan
+        if(openSet.has(k)){
+          ctx.fillStyle = "rgba(80,120,255,0.20)";
+          ctx.fillRect(x*cell, y*cell, cell, cell);
+        }
+        if(closedSet.has(k)){
+          ctx.fillStyle = "rgba(120,120,120,0.10)";
+          ctx.fillRect(x*cell, y*cell, cell, cell);
+        }
+      }
+    }
+
+    // grid lines (subtle)
+    ctx.strokeStyle = "rgba(127,127,127,0.15)";
+    ctx.lineWidth = 1;
+    for(let i=0;i<=N;i++){
+      ctx.beginPath(); ctx.moveTo(i*cell,0); ctx.lineTo(i*cell,size); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0,i*cell); ctx.lineTo(size,i*cell); ctx.stroke();
+    }
+
+    // planned path (thin)
+    if(plan.length){
+      ctx.strokeStyle = "rgba(80,120,255,0.9)";
+      ctx.lineWidth = Math.max(2, cell*0.15);
+      ctx.beginPath();
+      for(let i=0;i<plan.length;i++){
+        const p = plan[i];
+        const cx = p.x*cell + cell/2;
+        const cy = p.y*cell + cell/2;
+        if(i===0) ctx.moveTo(cx,cy); else ctx.lineTo(cx,cy);
+      }
+      ctx.stroke();
+    }
+
+    // executed path (thicker)
+    if(executed.length){
+      ctx.strokeStyle = "rgba(255,200,80,0.95)";
+      ctx.lineWidth = Math.max(3, cell*0.25);
+      ctx.beginPath();
+      for(let i=0;i<executed.length;i++){
+        const p = executed[i];
+        const cx = p.x*cell + cell/2;
+        const cy = p.y*cell + cell/2;
+        if(i===0) ctx.moveTo(cx,cy); else ctx.lineTo(cx,cy);
+      }
+      ctx.stroke();
+    }
+
+    // sensor radius
+    const r = +el("radius").value;
+    ctx.fillStyle = "rgba(255,255,255,0.08)";
+    ctx.beginPath();
+    ctx.arc(agent.x*cell+cell/2, agent.y*cell+cell/2, r*cell, 0, Math.PI*2);
+    ctx.fill();
+
+    // start / goal / agent markers
+    drawMarker(start.x,start.y,"rgba(80,200,255,0.95)");
+    drawMarker(goal.x,goal.y,"rgba(255,80,200,0.95)");
+    drawMarker(agent.x,agent.y,"rgba(255,255,255,0.95)");
+
+    function drawMarker(x,y,color){
+      ctx.fillStyle = color;
+      ctx.beginPath();
+      ctx.arc(x*cell+cell/2, y*cell+cell/2, Math.max(4, cell*0.32), 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function updateStats(extra=""){
+    const algo = el("algo").value;
+    const replan = el("replan").value;
+    const ua = el("unknownAs").value;
+
+    const unknownCount = known.flat().filter(v=>v===-1).length;
+    const knownWalls = known.flat().filter(v=>v===1).length;
+
+    el("stats").innerHTML = `
+      <div class="stats">
+        <strong>Status</strong><br>
+        Step: ${stepCount} • Replans: ${replans} • Total expansions: ${expansions}<br>
+        Sensor ticks: ${sensorTicks} • Unknown cells: ${unknownCount} • Known walls: ${knownWalls}<br>
+        Algo: ${algo} • Replan: ${replan} • Unknown-as: ${ua}<br>
+        ${extra ? "<br><em>"+extra+"</em>" : ""}
+      </div>
+    `;
+  }
+
+  // ---------- Controls ----------
+  function stop(){
+    running = false;
+    if(timer){ clearInterval(timer); timer=null; }
+  }
+  function run(){
+    if(running) return;
+    running = true;
+    const ms = +el("speed").value;
+    timer = setInterval(() => {
+      const sp = +el("speed").value;
+      if(+sp !== ms){
+        clearInterval(timer);
+        timer = null;
+        running = false;
+        run();
+        return;
+      }
+      doStep();
+    }, Math.max(0, +el("speed").value));
+  }
+
+  el("regen").addEventListener("click", generateWorld);
+  el("clear").addEventListener("click", clearWorld);
+  el("reset").addEventListener("click", () => resetAgent(true));
+  el("step").addEventListener("click", doStep);
+  el("run").addEventListener("click", run);
+  el("pause").addEventListener("click", stop);
+
+  // Any parameter change triggers redraw + (optionally) plan refresh
+  ["radius","noise","sensorEvery","unknownAs","algo","heur","tiebreak","replan","speed","density","corridor","gridSize"]
+    .forEach(id => el(id).addEventListener("input", () => { draw(); updateStats(); }));
+
+  // ---------- Editing ----------
+  let editMode = null; // null | "start" | "goal"
+  window.addEventListener("keydown", (e) => {
+    if(e.key.toLowerCase()==="s") editMode="start";
+    if(e.key.toLowerCase()==="g") editMode="goal";
+  });
+  window.addEventListener("keyup", (e) => {
+    if(["s","g"].includes(e.key.toLowerCase())) editMode=null;
+  });
+
+  canvas.addEventListener("click", (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - rect.left) * (canvas.width / rect.width) / (canvas.width / N));
+    const y = Math.floor((e.clientY - rect.top)  * (canvas.height / rect.height) / (canvas.height / N));
+    if(x<0||y<0||x>=N||y>=N) return;
+    if(x===0||y===0||x===N-1||y===N-1) return;
+
+    if(editMode==="start"){
+      if(world[y][x]===1) world[y][x]=0;
+      start={x,y};
+      resetAgent(true);
+      return;
+    }
+    if(editMode==="goal"){
+      if(world[y][x]===1) world[y][x]=0;
+      goal={x,y};
+      resetAgent(true);
+      return;
+    }
+
+    // toggle wall
+    if((x===start.x && y===start.y) || (x===goal.x && y===goal.y)) return;
+    world[y][x] = world[y][x] ? 0 : 1;
+    // keep known aligned only if already revealed
+    if(known[y][x] !== -1) known[y][x] = world[y][x];
+    draw();
+  });
+
+  // ---------- Init ----------
+  generateWorld();
+  resizeCanvas();
+})();
+</script>
+</body>
+</html>
