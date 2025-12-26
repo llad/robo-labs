@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Single-Page SLAM Demo (2D FastSLAM-lite)</title>
+  <style>
+    :root { --bg:#0b0f17; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --line:#243042; }
+    html,body { height:100%; margin:0; background:var(--bg); color:var(--ink); font:14px/1.25 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; }
+    #wrap { display:grid; grid-template-columns: 340px 1fr; height:100%; }
+    #panel { background:var(--panel); border-right:1px solid var(--line); padding:14px; overflow:auto; }
+    #panel h1 { margin:0 0 10px; font-size:16px; }
+    #panel .row { display:flex; gap:10px; align-items:center; margin:10px 0; }
+    #panel label { display:flex; flex-direction:column; gap:6px; flex:1; }
+    #panel input[type="range"] { width:100%; }
+    #panel button { background:#1f2937; border:1px solid var(--line); color:var(--ink); padding:8px 10px; border-radius:8px; cursor:pointer; }
+    #panel button:active { transform: translateY(1px); }
+    #panel .pill { display:inline-block; padding:2px 8px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px; }
+    #panel .hint { color:var(--muted); font-size:12px; }
+    #panel .kv { display:grid; grid-template-columns: 1fr auto; gap:6px 10px; margin-top:10px; padding-top:10px; border-top:1px solid var(--line); }
+    #panel .kv div { color:var(--muted); }
+    #panel .kv strong { color:var(--ink); font-weight:600; }
+    #stage { position:relative; }
+    canvas { width:100%; height:100%; display:block; }
+    #legend { position:absolute; left:12px; top:12px; background:rgba(17,24,39,.75); border:1px solid rgba(36,48,66,.8); padding:10px; border-radius:10px; backdrop-filter: blur(8px); }
+    #legend div { display:flex; align-items:center; gap:8px; margin:4px 0; color:var(--muted); font-size:12px; }
+    #legend span.sw { width:10px; height:10px; border-radius:3px; display:inline-block; }
+    a { color:#93c5fd; text-decoration:none; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div id="panel">
+    <h1>2D SLAM demo <span class="pill">FastSLAM-lite</span></h1>
+    <div class="hint">
+      - Click the map to set a waypoint (robot drives toward it).<br/>
+      - Toggle <b>Known map</b> off to see SLAM (landmarks estimated).<br/>
+      - Turn up noise to make loop closure visible (revisits reduce drift).
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="btnPlay">Pause</button>
+      <button id="btnReset">Reset</button>
+      <button id="btnNewWorld">New world</button>
+    </div>
+
+    <div class="row">
+      <label>
+        Particles: <span id="lblN">300</span>
+        <input id="rngN" type="range" min="50" max="1200" step="50" value="300">
+      </label>
+    </div>
+
+    <div class="row">
+      <label>
+        Sensor range: <span id="lblRange">220</span>
+        <input id="rngRange" type="range" min="80" max="420" step="10" value="220">
+      </label>
+    </div>
+
+    <div class="row">
+      <label>
+        Odometry noise (pos): <span id="lblOdoP">1.8</span>
+        <input id="rngOdoP" type="range" min="0" max="8" step="0.1" value="1.8">
+      </label>
+      <label>
+        Odometry noise (ang): <span id="lblOdoA">1.6°</span>
+        <input id="rngOdoA" type="range" min="0" max="8" step="0.1" value="1.6">
+      </label>
+    </div>
+
+    <div class="row">
+      <label>
+        Measurement noise (range): <span id="lblMeasR">6</span>
+        <input id="rngMeasR" type="range" min="0.5" max="20" step="0.5" value="6">
+      </label>
+      <label>
+        Measurement noise (bearing): <span id="lblMeasB">3.0°</span>
+        <input id="rngMeasB" type="range" min="0.5" max="15" step="0.5" value="3.0">
+      </label>
+    </div>
+
+    <div class="row">
+      <label style="flex:0 0 160px;">
+        <input id="chkKnownMap" type="checkbox" checked />
+        Known map (Localization only)
+      </label>
+      <label style="flex:0 0 140px;">
+        <input id="chkShowParticles" type="checkbox" checked />
+        Show particles
+      </label>
+      <label style="flex:0 0 140px;">
+        <input id="chkShowUnc" type="checkbox" checked />
+        Show uncertainty
+      </label>
+    </div>
+
+    <div class="kv">
+      <div>Mode</div><strong id="kvMode">Localization (known landmarks)</strong>
+      <div>Waypoint</div><strong id="kvWp">None</strong>
+      <div>Effective N (Neff)</div><strong id="kvNeff">—</strong>
+      <div>Resample rate</div><strong id="kvResamp">—</strong>
+      <div>Loop closures</div><strong id="kvLoops">0</strong>
+    </div>
+
+    <div class="hint" style="margin-top:12px;">
+      Implementation: particle filter for pose + per-particle EKF landmarks (FastSLAM-style). Not production SLAM; designed to be readable and visual.
+    </div>
+  </div>
+
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="legend">
+      <div><span class="sw" style="background:#34d399;"></span> True robot</div>
+      <div><span class="sw" style="background:#60a5fa;"></span> PF mean pose</div>
+      <div><span class="sw" style="background:#fbbf24;"></span> Landmarks (true)</div>
+      <div><span class="sw" style="background:#a78bfa;"></span> Landmarks (estimated)</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // ---------- Utilities ----------
+  const TAU = Math.PI * 2;
+  const clamp = (x,a,b)=>Math.max(a,Math.min(b,x));
+  const wrapPi = (a)=>{ while(a> Math.PI) a-=TAU; while(a<-Math.PI) a+=TAU; return a; };
+  const randn = (() => { // Box-Muller
+    let spare = null;
+    return (mu=0, sigma=1) => {
+      if (spare !== null) { const v = spare; spare = null; return mu + sigma * v; }
+      let u=0,v=0,s=0;
+      while (s===0 || s>=1) { u=Math.random()*2-1; v=Math.random()*2-1; s=u*u+v*v; }
+      const mul = Math.sqrt(-2*Math.log(s)/s);
+      spare = v*mul;
+      return mu + sigma*(u*mul);
+    };
+  })();
+
+  // 2x2 helpers
+  const mat2 = {
+    add:(A,B)=>[A[0]+B[0],A[1]+B[1],A[2]+B[2],A[3]+B[3]],
+    sub:(A,B)=>[A[0]-B[0],A[1]-B[1],A[2]-B[2],A[3]-B[3]],
+    mul:(A,B)=>[
+      A[0]*B[0]+A[1]*B[2], A[0]*B[1]+A[1]*B[3],
+      A[2]*B[0]+A[3]*B[2], A[2]*B[1]+A[3]*B[3]
+    ],
+    mulVec:(A,x,y)=>[A[0]*x + A[1]*y, A[2]*x + A[3]*y],
+    det:(A)=>A[0]*A[3]-A[1]*A[2],
+    inv:(A)=>{
+      const d = mat2.det(A);
+      if (Math.abs(d) < 1e-12) return [1e12,0,0,1e12];
+      const id = 1/d;
+      return [ A[3]*id, -A[1]*id, -A[2]*id, A[0]*id ];
+    },
+    transp:(A)=>[A[0],A[2],A[1],A[3]]
+  };
+
+  // ---------- World ----------
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d');
+  const stage = document.getElementById('stage');
+
+  function resize() {
+    const r = stage.getBoundingClientRect();
+    canvas.width = Math.floor(r.width * devicePixelRatio);
+    canvas.height = Math.floor(r.height * devicePixelRatio);
+  }
+  addEventListener('resize', resize, {passive:true});
+  resize();
+
+  const W = () => canvas.width / devicePixelRatio;
+  const H = () => canvas.height / devicePixelRatio;
+
+  // Coordinate mapping: world is in pixel-like units with margin
+  const margin = 30;
+  const toScreen = (x,y) => [ (x)*devicePixelRatio, (y)*devicePixelRatio ];
+  const fromScreen = (sx,sy) => [ sx/devicePixelRatio, sy/devicePixelRatio ];
+
+  function newWorld(seedNoise=false) {
+    loops = 0;
+    // Landmarks
+    const nL = 12;
+    landmarks = [];
+    for (let i=0;i<nL;i++) {
+      const x = margin + Math.random()*(W()-2*margin);
+      const y = margin + Math.random()*(H()-2*margin);
+      landmarks.push({id:i, x, y});
+    }
+    // True robot state
+    truth = { x: W()/2, y: H()/2, th: Math.random()*TAU };
+    // Waypoint
+    waypoint = null;
+    // Particles init
+    initParticles();
+    // Track revisits for loop closure count (heuristic)
+    visitCells.clear();
+  }
+
+  // ---------- UI ----------
+  const ui = {
+    btnPlay: document.getElementById('btnPlay'),
+    btnReset: document.getElementById('btnReset'),
+    btnNewWorld: document.getElementById('btnNewWorld'),
+    rngN: document.getElementById('rngN'),
+    rngRange: document.getElementById('rngRange'),
+    rngOdoP: document.getElementById('rngOdoP'),
+    rngOdoA: document.getElementById('rngOdoA'),
+    rngMeasR: document.getElementById('rngMeasR'),
+    rngMeasB: document.getElementById('rngMeasB'),
+    chkKnownMap: document.getElementById('chkKnownMap'),
+    chkShowParticles: document.getElementById('chkShowParticles'),
+    chkShowUnc: document.getElementById('chkShowUnc'),
+    lblN: document.getElementById('lblN'),
+    lblRange: document.getElementById('lblRange'),
+    lblOdoP: document.getElementById('lblOdoP'),
+    lblOdoA: document.getElementById('lblOdoA'),
+    lblMeasR: document.getElementById('lblMeasR'),
+    lblMeasB: document.getElementById('lblMeasB'),
+    kvMode: document.getElementById('kvMode'),
+    kvWp: document.getElementById('kvWp'),
+    kvNeff: document.getElementById('kvNeff'),
+    kvResamp: document.getElementById('kvResamp'),
+    kvLoops: document.getElementById('kvLoops')
+  };
+
+  function readParams() {
+    const N = +ui.rngN.value;
+    const rangeMax = +ui.rngRange.value;
+    const odoPos = +ui.rngOdoP.value;
+    const odoAng = (+ui.rngOdoA.value) * Math.PI/180;
+    const measR = +ui.rngMeasR.value;
+    const measB = (+ui.rngMeasB.value) * Math.PI/180;
+    const knownMap = ui.chkKnownMap.checked;
+    return {N, rangeMax, odoPos, odoAng, measR, measB, knownMap};
+  }
+
+  function syncLabels() {
+    const p = readParams();
+    ui.lblN.textContent = p.N;
+    ui.lblRange.textContent = p.rangeMax;
+    ui.lblOdoP.textContent = p.odoPos.toFixed(1);
+    ui.lblOdoA.textContent = (p.odoAng*180/Math.PI).toFixed(1) + "°";
+    ui.lblMeasR.textContent = p.measR.toFixed(1);
+    ui.lblMeasB.textContent = (p.measB*180/Math.PI).toFixed(1) + "°";
+    ui.kvMode.textContent = p.knownMap ? "Localization (known landmarks)" : "SLAM (landmarks estimated)";
+  }
+
+  ui.rngN.addEventListener('input', () => { syncLabels(); initParticles(); });
+  ui.rngRange.addEventListener('input', syncLabels);
+  ui.rngOdoP.addEventListener('input', syncLabels);
+  ui.rngOdoA.addEventListener('input', syncLabels);
+  ui.rngMeasR.addEventListener('input', syncLabels);
+  ui.rngMeasB.addEventListener('input', syncLabels);
+  ui.chkKnownMap.addEventListener('change', () => { syncLabels(); initParticles(); });
+  ui.chkShowParticles.addEventListener('change', () => {});
+  ui.chkShowUnc.addEventListener('change', () => {});
+
+  let running = true;
+  ui.btnPlay.onclick = () => {
+    running = !running;
+    ui.btnPlay.textContent = running ? "Pause" : "Play";
+  };
+  ui.btnReset.onclick = () => newWorld();
+  ui.btnNewWorld.onclick = () => newWorld();
+
+  // Click to set waypoint
+  let waypoint = null;
+  canvas.addEventListener('pointerdown', (e) => {
+    const r = canvas.getBoundingClientRect();
+    const sx = (e.clientX - r.left) * (canvas.width / r.width);
+    const sy = (e.clientY - r.top)  * (canvas.height / r.height);
+    const [x,y] = fromScreen(sx,sy);
+    waypoint = {x, y};
+    ui.kvWp.textContent = `${x.toFixed(0)}, ${y.toFixed(0)}`;
+  });
+
+  // ---------- SLAM State ----------
+  let landmarks = [];
+  let truth = {x:0,y:0,th:0};
+
+  // Particle structure:
+  // { x,y,th, w, lms: Map(id -> {mu:[x,y], P:[a,b,c,d], seen:true}) }
+  let particles = [];
+  let lastResampleInfo = "—";
+  let loops = 0;
+
+  // Loop closure heuristic: if the robot returns to a previously visited cell, count it.
+  const visitCells = new Set();
+  function cellKey(x,y,cell=80) {
+    return `${Math.floor(x/cell)},${Math.floor(y/cell)}`;
+  }
+
+  function initParticles() {
+    const p = readParams();
+    particles = [];
+    for (let i=0;i<p.N;i++) {
+      particles.push({
+        x: truth.x + randn(0, 6),
+        y: truth.y + randn(0, 6),
+        th: wrapPi(truth.th + randn(0, 6*Math.PI/180)),
+        w: 1/p.N,
+        lms: new Map()
+      });
+    }
+  }
+
+  // ---------- Motion & Sensing ----------
+  function stepTruth(dt) {
+    // simple waypoint-seeking controller
+    const maxV = 90;     // units/sec
+    const maxW = 2.2;    // rad/sec
+    let v = 40;
+    let w = 0;
+
+    if (waypoint) {
+      const dx = waypoint.x - truth.x;
+      const dy = waypoint.y - truth.y;
+      const dist = Math.hypot(dx,dy);
+      const target = Math.atan2(dy,dx);
+      const err = wrapPi(target - truth.th);
+      w = clamp(err*2.2, -maxW, maxW);
+      v = clamp(dist*1.2, 0, maxV) * (Math.abs(err) < 1.2 ? 1 : 0.35);
+      if (dist < 14) waypoint = null;
+    } else {
+      // wander
+      v = 35;
+      w = 0.4*Math.sin(perfNow()*0.0006);
+    }
+
+    // integrate
+    truth.th = wrapPi(truth.th + w*dt);
+    truth.x += Math.cos(truth.th) * v * dt;
+    truth.y += Math.sin(truth.th) * v * dt;
+
+    // bounce off walls
+    if (truth.x < margin) { truth.x = margin; truth.th = wrapPi(Math.PI - truth.th); }
+    if (truth.x > W()-margin) { truth.x = W()-margin; truth.th = wrapPi(Math.PI - truth.th); }
+    if (truth.y < margin) { truth.y = margin; truth.th = wrapPi(-truth.th); }
+    if (truth.y > H()-margin) { truth.y = H()-margin; truth.th = wrapPi(-truth.th); }
+
+    // loop closure counter
+    const k = cellKey(truth.x, truth.y);
+    if (visitCells.has(k)) loops++;
+    else visitCells.add(k);
+  }
+
+  function getOdometryDelta(dt) {
+    // "control" derived from truth motion but corrupted by odometry noise
+    // For demo: approximate commanded delta in robot frame
+    // We'll synthesize from small forward motion + small rotation.
+    const v = 60; // nominal forward
+    const w = 0.0;
+    // But better: use actual recent kinematics? Keep it simple: use waypoint controller effect via dt:
+    // We'll infer from lastTruth; implemented in main loop with stored previous truth.
+    return null;
+  }
+
+  function senseLandmarks(fromX, fromY, fromTh, params) {
+    // returns array of measurements: {id, r, b} with noise
+    const out = [];
+    for (const lm of landmarks) {
+      const dx = lm.x - fromX;
+      const dy = lm.y - fromY;
+      const r = Math.hypot(dx,dy);
+      if (r > params.rangeMax) continue;
+      const b = wrapPi(Math.atan2(dy,dx) - fromTh);
+      out.push({
+        id: lm.id,
+        r: r + randn(0, params.measR),
+        b: wrapPi(b + randn(0, params.measB))
+      });
+    }
+    return out;
+  }
+
+  // ---------- FastSLAM-lite update ----------
+  function predictParticles(dx, dy, dth, params) {
+    // Apply noisy odometry to each particle
+    for (const pt of particles) {
+      const ndx = dx + randn(0, params.odoPos);
+      const ndy = dy + randn(0, params.odoPos);
+      const ndt = dth + randn(0, params.odoAng);
+
+      // odom is in robot frame of the particle: convert to world frame
+      const c = Math.cos(pt.th), s = Math.sin(pt.th);
+      pt.x += c*ndx - s*ndy;
+      pt.y += s*ndx + c*ndy;
+      pt.th = wrapPi(pt.th + ndt);
+
+      // keep within bounds
+      pt.x = clamp(pt.x, margin, W()-margin);
+      pt.y = clamp(pt.y, margin, H()-margin);
+    }
+  }
+
+  function updateWithMeasurements(meas, params) {
+    // Weight each particle based on measurement likelihood.
+    // If knownMap=true, we use true landmark positions directly.
+    // Else, we maintain per-particle EKF landmark estimates.
+    const R = [params.measR*params.measR, 0, 0, params.measB*params.measB]; // diag
+
+    for (const pt of particles) {
+      let logw = 0; // accumulate in log-space for stability
+
+      for (const z of meas) {
+        const lmTrue = landmarks[z.id];
+
+        if (params.knownMap) {
+          // Likelihood against true landmark position
+          const dx = lmTrue.x - pt.x;
+          const dy = lmTrue.y - pt.y;
+          const q = dx*dx + dy*dy;
+          const rhat = Math.sqrt(q);
+          const bhat = wrapPi(Math.atan2(dy,dx) - pt.th);
+
+          const vr = z.r - rhat;
+          const vb = wrapPi(z.b - bhat);
+
+          // Gaussian log-likelihood with diagonal cov
+          logw += -0.5*( (vr*vr)/(params.measR*params.measR) + (vb*vb)/(params.measB*params.measB) );
+        } else {
+          // SLAM: per-particle landmark EKF update
+          let lm = pt.lms.get(z.id);
+          if (!lm) {
+            // Initialize landmark in world frame using current particle pose and measurement
+            const lx = pt.x + z.r*Math.cos(pt.th + z.b);
+            const ly = pt.y + z.r*Math.sin(pt.th + z.b);
+
+            // Jacobian from measurement noise to landmark position (approx)
+            // J = d(l)/d([r,b])
+            const cb = Math.cos(pt.th + z.b);
+            const sb = Math.sin(pt.th + z.b);
+            const J = [ cb, -z.r*sb,
+                        sb,  z.r*cb ];
+            // P = J R J^T
+            const JR = [
+              J[0]*R[0] + J[1]*R[2], J[0]*R[1] + J[1]*R[3],
+              J[2]*R[0] + J[3]*R[2], J[2]*R[1] + J[3]*R[3]
+            ];
+            const P = [
+              JR[0]*J[0] + JR[1]*J[1], JR[0]*J[2] + JR[1]*J[3],
+              JR[2]*J[0] + JR[3]*J[1], JR[2]*J[2] + JR[3]*J[3]
+            ];
+
+            lm = { mu:[lx,ly], P, seen:true };
+            pt.lms.set(z.id, lm);
+
+            // give a modest likelihood contribution for initialization
+            logw += -0.5;
+          } else {
+            // EKF update in measurement space (r,b)
+            const dx = lm.mu[0] - pt.x;
+            const dy = lm.mu[1] - pt.y;
+            const q = dx*dx + dy*dy;
+            const rhat = Math.sqrt(q);
+            const bhat = wrapPi(Math.atan2(dy,dx) - pt.th);
+
+            const vr = z.r - rhat;
+            const vb = wrapPi(z.b - bhat);
+            const v = [vr, vb];
+
+            // H = d h / d landmark position (2x2)
+            // r = sqrt(q); b = atan2(dy,dx) - th
+            const H = [
+              dx / rhat,  dy / rhat,
+             -dy / q,     dx / q
+            ];
+
+            // S = H P H^T + R
+            const HP = [
+              H[0]*lm.P[0] + H[1]*lm.P[2], H[0]*lm.P[1] + H[1]*lm.P[3],
+              H[2]*lm.P[0] + H[3]*lm.P[2], H[2]*lm.P[1] + H[3]*lm.P[3]
+            ];
+            const Ht = mat2.transp(H);
+            let S = mat2.mul(HP, Ht);
+            S = mat2.add(S, R);
+
+            // K = P H^T S^-1
+            const Sinv = mat2.inv(S);
+            const PHt = mat2.mul(lm.P, Ht);
+            const K = mat2.mul(PHt, Sinv);
+
+            // mu = mu + K v
+            const Kv = mat2.mulVec(K, v[0], v[1]);
+            lm.mu[0] += Kv[0];
+            lm.mu[1] += Kv[1];
+
+            // P = (I - K H) P
+            const KH = mat2.mul(K, H);
+            const I = [1,0,0,1];
+            const I_KH = mat2.sub(I, KH);
+            lm.P = mat2.mul(I_KH, lm.P);
+
+            // weight by innovation likelihood ~ exp(-0.5 v^T S^-1 v)
+            const t = mat2.mulVec(Sinv, v[0], v[1]);
+            const maha = v[0]*t[0] + v[1]*t[1];
+            logw += -0.5 * maha;
+          }
+        }
+      }
+
+      pt.w = Math.exp(logw);
+    }
+
+    // normalize
+    let sum = 0;
+    for (const pt of particles) sum += pt.w;
+    if (sum < 1e-12) {
+      const u = 1/particles.length;
+      for (const pt of particles) pt.w = u;
+    } else {
+      for (const pt of particles) pt.w /= sum;
+    }
+  }
+
+  function effectiveN() {
+    let s = 0;
+    for (const pt of particles) s += pt.w*pt.w;
+    return (s>0) ? 1/s : 0;
+  }
+
+  function resampleIfNeeded(params) {
+    const Neff = effectiveN();
+    const N = particles.length;
+    ui.kvNeff.textContent = Neff.toFixed(0);
+
+    const thresh = 0.55 * N;
+    if (Neff > thresh) { lastResampleInfo = "No"; ui.kvResamp.textContent = lastResampleInfo; return; }
+
+    // systematic resampling
+    const cdf = new Float64Array(N);
+    let acc = 0;
+    for (let i=0;i<N;i++) { acc += particles[i].w; cdf[i] = acc; }
+    const step = 1/N;
+    let u = Math.random()*step;
+    const newP = [];
+
+    let i=0;
+    for (let j=0;j<N;j++) {
+      const uj = u + j*step;
+      while (uj > cdf[i]) i++;
+      const src = particles[i];
+
+      // deep-ish copy: pose + landmarks map (copy each landmark struct)
+      const lms = new Map();
+      for (const [id,lm] of src.lms.entries()) {
+        lms.set(id, { mu:[lm.mu[0], lm.mu[1]], P:[...lm.P], seen:true });
+      }
+      newP.push({ x:src.x, y:src.y, th:src.th, w:1/N, lms });
+    }
+
+    particles = newP;
+    lastResampleInfo = "Yes";
+    ui.kvResamp.textContent = lastResampleInfo;
+  }
+
+  function meanPose() {
+    // weighted mean with circular mean for theta
+    let mx=0,my=0, cs=0, ss=0;
+    for (const pt of particles) {
+      mx += pt.w * pt.x;
+      my += pt.w * pt.y;
+      cs += pt.w * Math.cos(pt.th);
+      ss += pt.w * Math.sin(pt.th);
+    }
+    return { x:mx, y:my, th: Math.atan2(ss, cs) };
+  }
+
+  function poseCov(mean) {
+    // approximate covariance of (x,y) from particles
+    let cxx=0,cxy=0,cyy=0;
+    for (const pt of particles) {
+      const dx = pt.x - mean.x;
+      const dy = pt.y - mean.y;
+      cxx += pt.w * dx*dx;
+      cxy += pt.w * dx*dy;
+      cyy += pt.w * dy*dy;
+    }
+    return {cxx,cxy,cyy};
+  }
+
+  function bestParticle() {
+    let best = particles[0];
+    for (const pt of particles) if (pt.w > best.w) best = pt;
+    return best;
+  }
+
+  // ---------- Drawing ----------
+  function drawRobot(x,y,th, color, scale=1) {
+    const r = 10*scale;
+    ctx.save();
+    ctx.translate(x,y);
+    ctx.rotate(th);
+    ctx.beginPath();
+    ctx.moveTo(r,0);
+    ctx.lineTo(-r*0.8, r*0.6);
+    ctx.lineTo(-r*0.8,-r*0.6);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawEllipse(mean, cov) {
+    // eigen of 2x2 covariance
+    const {cxx,cxy,cyy} = cov;
+    const tr = cxx + cyy;
+    const det = cxx*cyy - cxy*cxy;
+    const disc = Math.max(0, tr*tr/4 - det);
+    const s = Math.sqrt(disc);
+    const l1 = tr/2 + s;
+    const l2 = tr/2 - s;
+
+    // angle
+    const ang = 0.5 * Math.atan2(2*cxy, cxx - cyy);
+
+    // 2-sigma
+    const a = 2*Math.sqrt(Math.max(l1,1e-9));
+    const b = 2*Math.sqrt(Math.max(l2,1e-9));
+
+    ctx.save();
+    ctx.translate(mean.x, mean.y);
+    ctx.rotate(ang);
+    ctx.beginPath();
+    ctx.ellipse(0,0,a,b,0,0,TAU);
+    ctx.strokeStyle = "rgba(96,165,250,0.8)";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function draw() {
+    ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0);
+    ctx.clearRect(0,0,W(),H());
+
+    // background grid
+    ctx.strokeStyle = "rgba(36,48,66,0.45)";
+    ctx.lineWidth = 1;
+    for (let x=0;x<W();x+=60) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,H()); ctx.stroke(); }
+    for (let y=0;y<H();y+=60) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(W(),y); ctx.stroke(); }
+
+    // waypoint
+    if (waypoint) {
+      ctx.beginPath();
+      ctx.arc(waypoint.x, waypoint.y, 8, 0, TAU);
+      ctx.strokeStyle = "rgba(229,231,235,0.8)";
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(waypoint.x-12, waypoint.y);
+      ctx.lineTo(waypoint.x+12, waypoint.y);
+      ctx.moveTo(waypoint.x, waypoint.y-12);
+      ctx.lineTo(waypoint.x, waypoint.y+12);
+      ctx.stroke();
+    } else {
+      ui.kvWp.textContent = "None";
+    }
+
+    // landmarks: true
+    for (const lm of landmarks) {
+      ctx.beginPath();
+      ctx.arc(lm.x, lm.y, 6, 0, TAU);
+      ctx.fillStyle = "#fbbf24";
+      ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.35)";
+      ctx.stroke();
+    }
+
+    // particles
+    if (ui.chkShowParticles.checked) {
+      ctx.fillStyle = "rgba(156,163,175,0.55)";
+      for (const pt of particles) {
+        ctx.fillRect(pt.x-1, pt.y-1, 2, 2);
+      }
+    }
+
+    // mean & uncertainty
+    const m = meanPose();
+    if (ui.chkShowUnc.checked) drawEllipse(m, poseCov(m));
+
+    // SLAM landmarks estimate: from best particle
+    const params = readParams();
+    if (!params.knownMap) {
+      const b = bestParticle();
+      ctx.fillStyle = "rgba(167,139,250,0.9)";
+      for (const [id,lm] of b.lms.entries()) {
+        ctx.beginPath();
+        ctx.arc(lm.mu[0], lm.mu[1], 5, 0, TAU);
+        ctx.fill();
+      }
+    }
+
+    // robots
+    drawRobot(truth.x, truth.y, truth.th, "#34d399", 1.0);
+    drawRobot(m.x, m.y, m.th, "#60a5fa", 0.9);
+
+    // HUD stats
+    ui.kvLoops.textContent = String(loops);
+    ui.kvResamp.textContent = lastResampleInfo;
+  }
+
+  // ---------- Main Loop ----------
+  let lastT = performance.now();
+  let prevTruth = {...truth};
+
+  function perfNow(){ return performance.now(); }
+
+  function tick(t) {
+    const dt = clamp((t - lastT)/1000, 0, 0.05);
+    lastT = t;
+
+    syncLabels();
+
+    if (running) {
+      // Move truth
+      prevTruth = {...truth};
+      stepTruth(dt);
+
+      // Derive odometry delta in truth frame between prev and current, then corrupt per particle
+      const dxw = truth.x - prevTruth.x;
+      const dyw = truth.y - prevTruth.y;
+      const dth = wrapPi(truth.th - prevTruth.th);
+
+      // Convert world delta to robot frame of prevTruth (as "odometry")
+      const c = Math.cos(prevTruth.th), s = Math.sin(prevTruth.th);
+      const dx =  c*dxw + s*dyw;
+      const dy = -s*dxw + c*dyw;
+
+      const params = readParams();
+
+      // PF predict
+      predictParticles(dx, dy, dth, params);
+
+      // Measurements from truth pose
+      const meas = senseLandmarks(truth.x, truth.y, truth.th, params);
+
+      // PF update
+      updateWithMeasurements(meas, params);
+
+      // resample
+      resampleIfNeeded(params);
+    }
+
+    draw();
+    requestAnimationFrame(tick);
+  }
+
+  // ---------- Start ----------
+  syncLabels();
+  newWorld();
+  requestAnimationFrame(tick);
+
+})();
+</script>
+</body>
+</html>
