@@ -15,3 +15,6 @@ Each app below runs as a standalone GitHub Pages HTML file.
 - **Virtual Sensor Algorithms** — Experiments with virtual sensor fusion and signal processing.
   - GitHub Pages: [Virtual Sensor Algorithms](https://llad.github.io/robo-labs/virtual-sensor-algorithms.html)
   - Source: [virtual-sensor-algorithms.html](virtual-sensor-algorithms.html)
+- **Realtime Chat Robot** — Demo of a realtime chat-driven robot interface.
+  - GitHub Pages: [Realtime Chat Robot](https://llad.github.io/robo-labs/realtime-chat-robot.html)
+  - Source: [realtime-chat-robot.html](realtime-chat-robot.html)
