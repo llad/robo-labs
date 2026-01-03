@@ -1,0 +1,945 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Robot Friend – OpenAI Realtime Demo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    :root {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color-scheme: dark;
+      --bg: #050509;
+      --panel: #101018;
+      --accent: #4fd1c5;
+      --accent-soft: rgba(79, 209, 197, 0.16);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --text-subtle: rgba(255, 255, 255, 0.7);
+      --danger: #f56565;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: radial-gradient(circle at top, #151530 0, #050509 50%, #000 100%);
+      color: #f9fafb;
+      display: flex;
+      align-items: stretch;
+      justify-content: center;
+      min-height: 100vh;
+    }
+
+    .app {
+      max-width: 960px;
+      width: 100%;
+      margin: 16px;
+      padding: 16px;
+      border-radius: 18px;
+      background: linear-gradient(135deg, rgba(79, 209, 197, 0.08), rgba(99, 102, 241, 0.12));
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      box-shadow:
+        0 24px 80px rgba(0, 0, 0, 0.65),
+        0 0 0 1px rgba(255, 255, 255, 0.05);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    header h1 {
+      margin: 0;
+      font-size: 1.1rem;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      color: #e5e7eb;
+    }
+
+    header span {
+      font-size: 0.8rem;
+      color: var(--text-subtle);
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button {
+      border-radius: 999px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(15, 23, 42, 0.92);
+      color: #f9fafb;
+      padding: 6px 14px;
+      font-size: 0.85rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      outline: none;
+      transition:
+        background 120ms ease,
+        border-color 120ms ease,
+        transform 80ms ease;
+    }
+
+    button.primary {
+      background: radial-gradient(circle at top left, var(--accent) 0, #2563eb 60%, #1d4ed8 100%);
+      border-color: rgba(15, 23, 42, 0.8);
+      font-weight: 600;
+    }
+
+    button.destructive {
+      border-color: rgba(248, 113, 113, 0.6);
+      color: #fecaca;
+    }
+
+    button:hover:not(:disabled) {
+      background: rgba(15, 23, 42, 1);
+      transform: translateY(-0.5px);
+    }
+
+    button.primary:hover:not(:disabled) {
+      background: radial-gradient(circle at top left, var(--accent) 0, #1d4ed8 55%, #1d4ed8 100%);
+    }
+
+    button:disabled {
+      opacity: 0.4;
+      cursor: default;
+      transform: none;
+    }
+
+    .status-pill {
+      padding: 3px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border-subtle);
+      font-size: 0.75rem;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(15, 23, 42, 0.8);
+      color: var(--text-subtle);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #4b5563;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 1);
+    }
+
+    .status-dot.connected {
+      background: var(--accent);
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 1), 0 0 10px rgba(79, 209, 197, 0.6);
+    }
+
+    .status-dot.connecting {
+      background: #f59e0b;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, 1), 0 0 10px rgba(245, 158, 11, 0.6);
+    }
+
+    #statusText {
+      max-width: 220px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .panels {
+      display: grid;
+      grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+      gap: 10px;
+      min-height: 320px;
+    }
+
+    @media (max-width: 800px) {
+      .panels {
+        grid-template-columns: minmax(0, 1fr);
+      }
+    }
+
+    .panel {
+      background: rgba(6, 8, 20, 0.92);
+      border-radius: 16px;
+      border: 1px solid var(--border-subtle);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      backdrop-filter: blur(18px);
+    }
+
+    .panel h2 {
+      margin: 0;
+      font-size: 0.9rem;
+      text-transform: uppercase;
+      letter-spacing: 0.09em;
+      color: var(--text-subtle);
+    }
+
+    .panel small {
+      font-size: 0.75rem;
+      color: var(--text-subtle);
+    }
+
+    #chatLog {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 2px 2px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      scrollbar-width: thin;
+    }
+
+    .msg {
+      max-width: 80%;
+      padding: 7px 10px;
+      border-radius: 12px;
+      font-size: 0.85rem;
+      line-height: 1.4;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .msg.user {
+      margin-left: auto;
+      border-bottom-right-radius: 4px;
+      background: linear-gradient(135deg, #2563eb, #4f46e5);
+    }
+
+    .msg.assistant {
+      margin-right: auto;
+      border-bottom-left-radius: 4px;
+      background: rgba(15, 23, 42, 0.95);
+      border: 1px solid rgba(148, 163, 184, 0.5);
+    }
+
+    .msg.system {
+      margin: 0 auto;
+      max-width: 100%;
+      background: rgba(15, 23, 42, 0.9);
+      border-radius: 999px;
+      border: 1px dashed rgba(148, 163, 184, 0.5);
+      padding-inline: 12px;
+      font-size: 0.75rem;
+      color: var(--text-subtle);
+    }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 4px;
+    }
+
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      background: rgba(15, 23, 42, 0.95);
+      color: #f9fafb;
+      padding: 7px 10px;
+      font-size: 0.85rem;
+      outline: none;
+      transition:
+        border-color 120ms ease,
+        box-shadow 120ms ease,
+        background 120ms ease;
+    }
+
+    textarea {
+      border-radius: 12px;
+      resize: vertical;
+      min-height: 80px;
+      max-height: 200px;
+      font-family: inherit;
+    }
+
+    input[type="text"]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(79, 209, 197, 0.4);
+      background: rgba(15, 23, 42, 1);
+    }
+
+    .microphone-hint {
+      font-size: 0.75rem;
+      color: var(--text-subtle);
+    }
+
+    .microphone-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.5);
+      background: rgba(15, 23, 42, 0.9);
+      font-size: 0.75rem;
+    }
+
+    .microphone-pill strong {
+      color: var(--accent);
+      font-weight: 600;
+    }
+
+    /* Config modal */
+
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.6);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 30;
+    }
+
+    .modal {
+      width: min(420px, 100% - 32px);
+      background: radial-gradient(circle at top left, rgba(79, 209, 197, 0.24), rgba(15, 23, 42, 0.98));
+      border-radius: 18px;
+      padding: 16px 16px 12px;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.85);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .modal-header h2 {
+      margin: 0;
+      font-size: 0.95rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+    }
+
+    .modal-close {
+      border-radius: 999px;
+      border: 1px solid rgba(148, 163, 184, 0.7);
+      background: rgba(15, 23, 42, 0.96);
+      width: 26px;
+      height: 26px;
+      font-size: 0.8rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .modal-body {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 0.85rem;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .field label {
+      font-size: 0.8rem;
+      color: #e5e7eb;
+    }
+
+    .field small {
+      font-size: 0.75rem;
+      color: var(--text-subtle);
+    }
+
+    .modal-footer {
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    .warning {
+      font-size: 0.75rem;
+      color: #fed7d7;
+      border-radius: 10px;
+      background: rgba(127, 29, 29, 0.65);
+      border: 1px solid rgba(248, 113, 113, 0.7);
+      padding: 7px 10px;
+    }
+
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      padding: 3px 8px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      border: 1px solid rgba(148, 163, 184, 0.6);
+      color: var(--text-subtle);
+      background: rgba(15, 23, 42, 0.98);
+      gap: 4px;
+    }
+
+    code {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: 0.8rem;
+    }
+
+    .tiny {
+      font-size: 0.7rem;
+      color: var(--text-subtle);
+      margin-top: 4px;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <div>
+        <h1>Robot Friend Realtime</h1>
+        <span>OpenAI gpt-realtime over WebRTC</span>
+      </div>
+      <span class="pill">
+        <span style="width:6px;height:6px;border-radius:999px;background:var(--accent);"></span>
+        Realtime API
+      </span>
+    </header>
+
+    <div class="toolbar">
+      <div class="toolbar-left">
+        <button id="configButton" type="button">
+          ⚙️ Config
+        </button>
+        <button id="connectButton" type="button" class="primary">
+          Connect
+        </button>
+        <button id="disconnectButton" type="button" class="destructive" disabled>
+          Disconnect
+        </button>
+      </div>
+      <div class="toolbar-right">
+        <div class="status-pill">
+          <span id="statusDot" class="status-dot"></span>
+          <span id="statusText">Disconnected</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panels">
+      <section class="panel" aria-label="Chat">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;">
+          <div>
+            <h2>Conversation</h2>
+            <small>Text stream + audio voice replies</small>
+          </div>
+          <div class="microphone-pill">
+            Mic:
+            <strong>On while connected</strong>
+          </div>
+        </div>
+
+        <div id="chatLog">
+          <div class="msg system">
+            Say something once connected – your robot friend will respond in voice and text.
+          </div>
+        </div>
+
+        <form id="textForm" class="input-row" autocomplete="off">
+          <input
+            id="textInput"
+            type="text"
+            placeholder="Type a message to your robot friend and press Enter…"
+          />
+          <button type="submit">Send</button>
+        </form>
+        <div class="tiny">
+          Tip: You can talk out loud once connected; the mic stream goes straight to the model.
+        </div>
+      </section>
+
+      <section class="panel" aria-label="Session info">
+        <h2>Session</h2>
+        <small>Realtime session using ephemeral client secrets</small>
+        <div style="margin-top:4px;">
+          <div class="field">
+            <label>Model</label>
+            <div class="pill">
+              <code>gpt-realtime</code>
+            </div>
+          </div>
+          <div class="field" style="margin-top:6px;">
+            <label>Voice output</label>
+            <div class="pill">
+              <code>marin</code> (recommended high-quality voice)
+            </div>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label>Audio</label>
+            <small>Browser mic → Realtime API via WebRTC; remote audio plays here:</small>
+            <audio
+              id="remoteAudio"
+              autoplay
+              controls
+              style="margin-top:4px;width:100%;background:rgba(15,23,42,0.95);border-radius:10px;"
+            ></audio>
+          </div>
+          <div class="field" style="margin-top:8px;">
+            <label>Notes</label>
+            <div class="tiny">
+              This page calls
+              <code>POST /v1/realtime/client_secrets</code>
+              to mint an ephemeral key, then
+              <code>POST /v1/realtime/calls</code>
+              with your WebRTC offer SDP.
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="tiny">
+      Warning: Your API key is stored in this browser&apos;s <code>localStorage</code>. Use only for local experiments.
+    </div>
+  </div>
+
+  <!-- Config modal -->
+  <div id="configBackdrop" class="modal-backdrop hidden">
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="configTitle">
+      <div class="modal-header">
+        <h2 id="configTitle">Config</h2>
+        <button id="configClose" type="button" class="modal-close" aria-label="Close config">
+          ✕
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="warning">
+          Your OpenAI API key is used directly from this page to mint ephemeral Realtime client secrets.
+          Do not deploy this as a public, multi-user app without moving that call to your own backend.
+        </div>
+
+        <form id="configForm">
+          <div class="field">
+            <label for="apiKeyInput">OpenAI API key</label>
+            <input
+              id="apiKeyInput"
+              type="password"
+              autocomplete="off"
+              placeholder="sk-…"
+            />
+            <small>
+              Stored locally under <code>localStorage["robot_friend_openai_api_key"]</code>.
+            </small>
+          </div>
+
+          <div class="field">
+            <label for="instructionsInput">Robot friend instructions</label>
+            <textarea
+              id="instructionsInput"
+              placeholder="How should your robot friend behave?"
+            ></textarea>
+            <small>
+              Sent as <code>session.instructions</code> when minting the Realtime session.
+            </small>
+          </div>
+
+          <div class="modal-footer">
+            <button type="button" id="configCancel">Cancel</button>
+            <button type="submit" class="primary">Save</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ---- Storage keys ----
+    const STORAGE_KEY_API = "robot_friend_openai_api_key";
+    const STORAGE_KEY_INSTRUCTIONS = "robot_friend_instructions";
+
+    // ---- DOM references ----
+    const configButton = document.getElementById("configButton");
+    const connectButton = document.getElementById("connectButton");
+    const disconnectButton = document.getElementById("disconnectButton");
+    const statusDot = document.getElementById("statusDot");
+    const statusText = document.getElementById("statusText");
+    const chatLog = document.getElementById("chatLog");
+    const textForm = document.getElementById("textForm");
+    const textInput = document.getElementById("textInput");
+    const remoteAudio = document.getElementById("remoteAudio");
+
+    const configBackdrop = document.getElementById("configBackdrop");
+    const configClose = document.getElementById("configClose");
+    const configCancel = document.getElementById("configCancel");
+    const configForm = document.getElementById("configForm");
+    const apiKeyInput = document.getElementById("apiKeyInput");
+    const instructionsInput = document.getElementById("instructionsInput");
+
+    // ---- Realtime state ----
+    let pc = null;            // RTCPeerConnection
+    let dc = null;            // RTCDataChannel for events
+    let connected = false;
+
+    const defaultInstructions =
+      "You are my friendly robot friend named Rolo. " +
+      "You talk like a small, curious robot who is always on my side. " +
+      "Keep answers concise but warm, and be encouraging. " +
+      "You can speak and type at the same time.";
+
+    // ---- UI helpers ----
+    function setStatus(mode, text) {
+      statusDot.classList.remove("connected", "connecting");
+      if (mode === "connected") {
+        statusDot.classList.add("connected");
+      } else if (mode === "connecting") {
+        statusDot.classList.add("connecting");
+      }
+      statusText.textContent = text;
+    }
+
+    function setButtonsForState({ isConnecting, isConnected }) {
+      if (isConnecting) {
+        connectButton.disabled = true;
+        disconnectButton.disabled = true;
+      } else if (isConnected) {
+        connectButton.disabled = true;
+        disconnectButton.disabled = false;
+      } else {
+        connectButton.disabled = false;
+        disconnectButton.disabled = true;
+      }
+    }
+
+    function addMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = "msg " + role;
+      div.textContent = text;
+      chatLog.appendChild(div);
+      chatLog.scrollTop = chatLog.scrollHeight;
+      return div;
+    }
+
+    // ---- Config modal ----
+    function openConfig() {
+      const storedKey = localStorage.getItem(STORAGE_KEY_API) || "";
+      const storedInstructions =
+        localStorage.getItem(STORAGE_KEY_INSTRUCTIONS) || defaultInstructions;
+      apiKeyInput.value = storedKey;
+      instructionsInput.value = storedInstructions;
+      configBackdrop.classList.remove("hidden");
+    }
+
+    function closeConfig() {
+      configBackdrop.classList.add("hidden");
+    }
+
+    configButton.addEventListener("click", openConfig);
+    configClose.addEventListener("click", closeConfig);
+    configCancel.addEventListener("click", closeConfig);
+    configBackdrop.addEventListener("click", (e) => {
+      if (e.target === configBackdrop) {
+        closeConfig();
+      }
+    });
+
+    configForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const key = apiKeyInput.value.trim();
+      const instructions = instructionsInput.value.trim() || defaultInstructions;
+      if (!key) {
+        alert("Please enter an OpenAI API key.");
+        return;
+      }
+      localStorage.setItem(STORAGE_KEY_API, key);
+      localStorage.setItem(STORAGE_KEY_INSTRUCTIONS, instructions);
+      closeConfig();
+      setStatus("disconnected", "Config saved. Ready to connect.");
+    });
+
+    // ---- Realtime connection ----
+    async function connectRealtime() {
+      if (pc || dc || connected) {
+        return;
+      }
+
+      const apiKey = localStorage.getItem(STORAGE_KEY_API);
+      if (!apiKey) {
+        openConfig();
+        alert("Set your OpenAI API key first.");
+        return;
+      }
+
+      const instructions =
+        localStorage.getItem(STORAGE_KEY_INSTRUCTIONS) || defaultInstructions;
+
+      setStatus("connecting", "Minting ephemeral key…");
+      setButtonsForState({ isConnecting: true, isConnected: false });
+
+      try {
+        // 1) Mint ephemeral client secret for gpt-realtime
+        const sessionConfig = {
+          session: {
+            type: "realtime",
+            model: "gpt-realtime",
+            instructions,
+            modalities: ["text", "audio"],
+            voice: "marin"
+          }
+        };
+
+        const tokenRes = await fetch(
+          "https://api.openai.com/v1/realtime/client_secrets",
+          {
+            method: "POST",
+            headers: {
+              Authorization: "Bearer " + apiKey,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(sessionConfig)
+          }
+        );
+
+        if (!tokenRes.ok) {
+          const errText = await tokenRes.text();
+          throw new Error("client_secrets failed: " + tokenRes.status + " " + errText);
+        }
+
+        const tokenData = await tokenRes.json();
+        const ephemeralKey =
+          (tokenData.client_secret && tokenData.client_secret.value) ||
+          tokenData.value;
+
+        if (!ephemeralKey) {
+          throw new Error("No ephemeral key returned.");
+        }
+
+        // 2) Configure WebRTC
+        setStatus("connecting", "Setting up WebRTC…");
+
+        pc = new RTCPeerConnection();
+
+        // Remote audio from model
+        pc.ontrack = (event) => {
+          remoteAudio.srcObject = event.streams[0];
+        };
+
+        // Local mic → peer connection
+        const ms = await navigator.mediaDevices.getUserMedia({ audio: true });
+        ms.getTracks().forEach((t) => pc.addTrack(t));
+
+        // Data channel for events
+        dc = pc.createDataChannel("oai-events");
+
+        dc.addEventListener("open", () => {
+          connected = true;
+          setStatus("connected", "Connected to robot friend.");
+          setButtonsForState({ isConnecting: false, isConnected: true });
+          addMessage(
+            "system",
+            "Connection ready. Talk out loud or type – Rolo is listening."
+          );
+        });
+
+        dc.addEventListener("close", () => {
+          cleanupConnection("Data channel closed.");
+        });
+
+        dc.addEventListener("error", (err) => {
+          console.error("Data channel error:", err);
+        });
+
+        dc.addEventListener("message", handleServerEvent);
+
+        // 3) Offer → /v1/realtime/calls → Answer
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const callsRes = await fetch("https://api.openai.com/v1/realtime/calls", {
+          method: "POST",
+          headers: {
+            Authorization: "Bearer " + ephemeralKey,
+            "Content-Type": "application/sdp"
+          },
+          body: offer.sdp
+        });
+
+        if (!callsRes.ok) {
+          const errText = await callsRes.text();
+          throw new Error("realtime/calls failed: " + callsRes.status + " " + errText);
+        }
+
+        const answerSdp = await callsRes.text();
+        const answerDesc = {
+          type: "answer",
+          sdp: answerSdp
+        };
+        await pc.setRemoteDescription(answerDesc);
+
+        setStatus("connecting", "Finishing handshake…");
+        // Final state flip happens in dc.onopen
+      } catch (err) {
+        console.error(err);
+        alert("Failed to connect: " + err.message);
+        cleanupConnection("Error during connect.");
+      } finally {
+        if (!connected) {
+          setButtonsForState({ isConnecting: false, isConnected: false });
+        }
+      }
+    }
+
+    function cleanupConnection(reason) {
+      console.log("Cleaning up connection:", reason);
+      connected = false;
+      if (dc) {
+        try {
+          dc.close();
+        } catch (_) {}
+        dc = null;
+      }
+      if (pc) {
+        try {
+          pc.close();
+        } catch (_) {}
+        pc = null;
+      }
+      setButtonsForState({ isConnecting: false, isConnected: false });
+      setStatus("disconnected", "Disconnected");
+    }
+
+    // ---- Event streaming (text) ----
+    function handleServerEvent(evt) {
+      try {
+        const event = JSON.parse(evt.data);
+        if (!event || !event.type) return;
+
+        if (
+          event.type === "response.output_text.delta" &&
+          typeof event.delta === "string"
+        ) {
+          // Append delta to latest assistant bubble
+          const bubbles = chatLog.querySelectorAll(".msg.assistant");
+          let last = bubbles[bubbles.length - 1];
+          if (!last) {
+            last = addMessage("assistant", "");
+          }
+          last.textContent += event.delta;
+          chatLog.scrollTop = chatLog.scrollHeight;
+        } else if (
+          event.type === "response.output_text.done" &&
+          typeof event.text === "string"
+        ) {
+          // Ensure final text is present
+          const bubbles = chatLog.querySelectorAll(".msg.assistant");
+          let last = bubbles[bubbles.length - 1];
+          if (!last) {
+            last = addMessage("assistant", event.text);
+          } else if (!last.textContent.trim()) {
+            last.textContent = event.text;
+          }
+        } else if (event.type === "response.error" || event.type === "error") {
+          console.error("Realtime error event:", event);
+          addMessage("system", "Error from Realtime API – see console for details.");
+        }
+      } catch (err) {
+        console.error("Failed to parse server event:", err);
+      }
+    }
+
+    // ---- Sending text messages ----
+    function sendTextMessage(text) {
+      if (!dc || dc.readyState !== "open") {
+        alert("Not connected yet.");
+        return;
+      }
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      addMessage("user", trimmed);
+      const assistantBubble = addMessage("assistant", "");
+
+      // Create a conversation item with user text
+      const createEvent = {
+        type: "conversation.item.create",
+        item: {
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: trimmed
+            }
+          ]
+        }
+      };
+      dc.send(JSON.stringify(createEvent));
+
+      // Ask the model to respond (using session defaults: text + audio)
+      const responseEvent = {
+        type: "response.create"
+      };
+      dc.send(JSON.stringify(responseEvent));
+    }
+
+    textForm.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const value = textInput.value;
+      textInput.value = "";
+      if (value) {
+        sendTextMessage(value);
+      }
+    });
+
+    // ---- Button wiring ----
+    connectButton.addEventListener("click", () => {
+      if (!connected) {
+        connectRealtime();
+      }
+    });
+
+    disconnectButton.addEventListener("click", () => {
+      cleanupConnection("Manual disconnect");
+    });
+
+    // ---- Initial load ----
+    window.addEventListener("load", () => {
+      const hasKey = !!localStorage.getItem(STORAGE_KEY_API);
+      if (!hasKey) {
+        setStatus("disconnected", "Add API key in Config.");
+        openConfig();
+      } else {
+        setStatus("disconnected", "Ready. Connect when you like.");
+      }
+    });
+  </script>
+</body>
+</html>
