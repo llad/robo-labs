@@ -711,7 +711,6 @@
             type: "realtime",
             model: "gpt-realtime",
             instructions,
-            modalities: ["text", "audio"],
             voice: "marin"
           }
         };
@@ -760,6 +759,16 @@
         dc = pc.createDataChannel("oai-events");
 
         dc.addEventListener("open", () => {
+          dc.send(
+            JSON.stringify({
+              type: "session.update",
+              session: {
+                instructions,
+                modalities: ["text", "audio"],
+                voice: "marin"
+              }
+            })
+          );
           connected = true;
           setStatus("connected", "Connected to robot friend.");
           setButtonsForState({ isConnecting: false, isConnected: true });
